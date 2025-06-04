@@ -1,0 +1,19 @@
+{
+  "central_server": {
+    "host": "0.0.0.0",
+    "port": 8765
+  },
+  "websocket": {
+    "master_path": "/master",
+    "farm_path": "/farm",
+    "reconnect_delay": 5
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+  },
+  "adb": {
+    "timeout": 10,
+    "retry_delay": 5
+  }
+}
