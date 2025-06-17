@@ -110,6 +110,92 @@ python3 farm-device-executor.py emulator-5556
 python3 farm-device-executor.py
 ```
 
+## 🎛️ Command Line Options
+
+### Quick Reference Table
+
+| Script | Flag | Description | Example |
+|--------|------|-------------|---------|
+| `master-recorder.py` | `--debug` | Enable verbose event logging | `python3 master-recorder.py --debug` |
+| `farm-device-executor.py` | `--debug` | Enable verbose action logging | `python3 farm-device-executor.py --debug` |
+| `farm-device-executor.py` | `--master DEVICE` | Exclude master device from farm | `python3 farm-device-executor.py --master emulator-5554` |
+| `farm-device-executor.py` | `--server URL` | Custom WebSocket server URL | `python3 farm-device-executor.py --server ws://192.168.1.100:8765/farm` |
+| `farm-device-executor.py` | `--log-level LEVEL` | Set logging level | `python3 farm-device-executor.py --log-level WARNING` |
+| `farm-device-executor.py` | `devices...` | Specify target devices | `python3 farm-device-executor.py emulator-5556 emulator-5558` |
+
+### Master Recorder (`master-recorder.py`)
+
+```bash
+python3 master-recorder.py [OPTIONS]
+```
+
+**Available Options:**
+- `--help`, `-h` - Show help message and exit
+- `--debug` - Enable debug mode with verbose logging
+
+**Usage Examples:**
+```bash
+# Normal mode (clean output)
+python3 master-recorder.py
+
+# Debug mode (shows RAW EVENT, PARSED logs, touch coordinates, etc.)
+python3 master-recorder.py --debug
+```
+
+**Debug Mode Features:**
+- 📱 RAW EVENT logs for every input event
+- 🔍 PARSED event details with device path, type, code, and value
+- 👆 Touch coordinate tracking (X/Y positions)
+- 👆 Finger state changes (UP/DOWN/PRESS)
+- 🚀 Action sending details to central server
+- ⌨️ Key press/release events
+
+### Farm Device Executor (`farm-device-executor.py`)
+
+```bash
+python3 farm-device-executor.py [OPTIONS] [devices...]
+```
+
+**Available Options:**
+- `--help`, `-h` - Show help message and exit
+- `--server SERVER` - Central server URL (default: `ws://127.0.0.1:8765/farm`)
+- `--master MASTER` - Master device ID to exclude from farm (optional)
+- `--debug` - Enable debug mode with verbose logging
+- `--log-level {DEBUG,INFO,WARNING,ERROR}` - Set log level (default: INFO)
+- `devices` - Specific device IDs to use (optional positional arguments)
+
+**Usage Examples:**
+```bash
+# Normal mode - auto-discover all devices
+python3 farm-device-executor.py
+
+# Debug mode - verbose action execution logging
+python3 farm-device-executor.py --debug
+
+# Specify master device to exclude from farm
+python3 farm-device-executor.py --master emulator-5554
+
+# Use only specific devices
+python3 farm-device-executor.py emulator-5556 emulator-5558
+
+# Custom server URL
+python3 farm-device-executor.py --server ws://192.168.1.100:8765/farm
+
+# Combine multiple options
+python3 farm-device-executor.py --debug --master emulator-5554 --server ws://localhost:8765/farm emulator-5556 emulator-5558
+
+# Set specific log level without debug mode
+python3 farm-device-executor.py --log-level WARNING
+```
+
+**Debug Mode Features:**
+- 📡 RECEIVED action details from central server
+- 🎯 TAP EXECUTED confirmations with coordinates
+- ⌨️ KEY EXECUTED confirmations
+- 📝 TEXT EXECUTED confirmations
+- 👆 TAP PRESS STORED intermediate states
+- All internal debug logging messages
+
 ## 🎮 Usage Guide
 
 1.  **Initiate all components** using either the automated or manual setup methods.
@@ -119,6 +205,56 @@ python3 farm-device-executor.py
     *   Farm executors will indicate "FARM DEVICE READY".
 3.  **Interact with the Master Device**: Perform any desired actions such as tapping, swiping, typing, or pressing hardware buttons.
 4.  **Observe Replication**: Watch as all connected farm devices seamlessly replicate the actions performed on the master device.
+
+## 🎯 Complete Workflow Examples
+
+### Basic Setup (2 devices)
+```bash
+# Terminal 1: Start central server
+python3 central-device.py
+
+# Terminal 2: Start master recorder (clean output)
+python3 master-recorder.py
+
+# Terminal 3: Start farm executor (auto-exclude master)
+python3 farm-device-executor.py --master emulator-5554
+```
+
+### Debug Mode Setup (for troubleshooting)
+```bash
+# Terminal 1: Start central server
+python3 central-device.py
+
+# Terminal 2: Master recorder with verbose debugging
+python3 master-recorder.py --debug
+
+# Terminal 3: Farm executor with verbose debugging
+python3 farm-device-executor.py --debug --master emulator-5554
+```
+
+### Advanced Multi-Device Setup
+```bash
+# Terminal 1: Start central server
+python3 central-device.py
+
+# Terminal 2: Master recorder (normal mode)
+python3 master-recorder.py
+
+# Terminal 3: Farm executor managing specific devices
+python3 farm-device-executor.py --master emulator-5554 emulator-5556 emulator-5558 emulator-5560
+```
+
+### Custom Network Configuration
+```bash
+# Terminal 1: Start central server on custom port
+python3 central-device.py --port 9000
+
+# Terminal 2: Master recorder connecting to custom server
+python3 master-recorder.py
+
+# Terminal 3: Farm executor with custom server URL
+python3 farm-device-executor.py --server ws://192.168.1.100:9000/farm --master emulator-5554
+```
 
 ## 📱 Device Setup
 
@@ -151,26 +287,85 @@ adb devices
     *   Ensure the master device has appropriate ADB permissions.
     *   Try running `master-recorder.py` with `sudo` if permission issues persist.
     *   Verify `getevent` functionality: `adb shell getevent`.
+    *   **Enable debug mode** to see detailed event capture: `python3 master-recorder.py --debug`
 *   **Connection Issues**:
     *   Confirm all devices are listed by `adb devices`.
     *   Check firewall settings for WebSocket connections (port 8765 by default).
     *   Ensure the central server's IP address is reachable from all devices.
+    *   **Use debug mode** to see connection details: `python3 farm-device-executor.py --debug`
 *   **Coordinate Scaling Discrepancies**:
     *   The system automatically handles coordinate scaling. Review logs for scaling factor information if issues arise.
+    *   **Enable debug mode** to see coordinate transformation details: `python3 farm-device-executor.py --debug`
+*   **Actions Not Executing on Farm Devices**:
+    *   Verify farm devices are properly connected and authorized for ADB.
+    *   Check that the master device is correctly excluded: `python3 farm-device-executor.py --master DEVICE_ID`
+    *   **Use debug mode** to see received actions and execution status: `python3 farm-device-executor.py --debug`
+*   **Performance Issues**:
+    *   In production use, avoid debug mode as it generates verbose output.
+    *   Use `--log-level WARNING` or `--log-level ERROR` to reduce log verbosity.
+*   **Multiple Device Management**:
+    *   Specify exact devices to avoid conflicts: `python3 farm-device-executor.py device1 device2 device3`
+    *   Always specify the master device to prevent it from being included in the farm.
 
 ## 📊 Monitoring
 
 *   **Real-time Logs**: Each component (Central Server, Master Recorder, Farm Executors) provides detailed console logs for monitoring connections, captured events, and executed actions.
+*   **Debug Mode Monitoring**: Enable verbose logging for detailed troubleshooting:
+    ```bash
+    # Detailed event capture and parsing
+    python3 master-recorder.py --debug
+
+    # Detailed action execution and coordination
+    python3 farm-device-executor.py --debug
+    ```
+*   **Log Level Control**: Adjust verbosity for different scenarios:
+    ```bash
+    # Production mode (minimal logs)
+    python3 farm-device-executor.py --log-level ERROR
+
+    # Development mode (detailed logs)
+    python3 farm-device-executor.py --log-level DEBUG
+    ```
 *   **Status Check**: Use the `start-device-farm.sh` script and select option `5` ("Show Status") for an overview of active components and connected devices.
 
 ## 🔮 Advanced Configuration
 
-*   **Custom Device Selection**: Specify a device ID or an index from `adb devices` when launching `farm-device-executor.py`.
+*   **Custom Device Selection**: Specify device IDs when launching `farm-device-executor.py`.
     ```bash
-    python3 farm-device-executor.py emulator-5554
-    python3 farm-device-executor.py 1 # (for the first device in `adb devices` list)
+    # Use specific devices only
+    python3 farm-device-executor.py emulator-5554 emulator-5556
+
+    # Auto-discover but exclude master
+    python3 farm-device-executor.py --master emulator-5554
     ```
-*   **Network Configuration**: Modify the `CENTRAL_SERVER_URL` variable in `master-recorder.py` and `farm-device-executor.py` to adjust the WebSocket server address.
+*   **Network Configuration**: Use the `--server` flag to specify custom WebSocket server addresses.
+    ```bash
+    # Custom server URL
+    python3 farm-device-executor.py --server ws://192.168.1.100:8765/farm
+
+    # Custom port
+    python3 farm-device-executor.py --server ws://localhost:9000/farm
+    ```
+*   **Logging Configuration**: Control log verbosity for production or debugging scenarios.
+    ```bash
+    # Minimal logging for production
+    python3 farm-device-executor.py --log-level ERROR
+
+    # Verbose debugging
+    python3 master-recorder.py --debug
+    python3 farm-device-executor.py --debug
+
+    # Custom log level without debug mode
+    python3 farm-device-executor.py --log-level WARNING
+    ```
+*   **Master Device Management**: The system supports automatic master device detection and exclusion.
+    ```bash
+    # Explicitly specify master device
+    python3 farm-device-executor.py --master emulator-5554
+
+    # Let the system auto-detect master (if master-recorder.py is running)
+    python3 farm-device-executor.py
+    ```
 *   **Single Master Device**: The current architecture supports one master device at a time. To switch masters, stop the current `master-recorder.py` and restart it on the new desired master device.
 
 ## 🎯 Use Cases and Benefits

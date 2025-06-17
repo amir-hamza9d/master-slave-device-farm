@@ -1,0 +1,12 @@
+# Optional dependencies for enhanced functionality
+
+# UIAutomator2 for more reliable Android automation
+uiautomator2>=3.0.0
+
+# Additional automation libraries (optional)
+# appium-python-client>=2.0.0  # Uncomment if you want Appium support
+# selenium>=4.0.0              # Uncomment if you want web automation support
+
+# Development and testing tools
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
