@@ -116,7 +116,12 @@ async def handle_master_device(websocket):
                 
                 # Print action to console for visibility
                 action_type = data.get('action', 'unknown')
-                if 'x' in data and 'y' in data:
+                if action_type == 'swipe':
+                    start_x, start_y = data.get('start_x', 0), data.get('start_y', 0)
+                    end_x, end_y = data.get('end_x', 0), data.get('end_y', 0)
+                    duration = data.get('duration', 0)
+                    print(f"👆 ACTION RECEIVED: swipe from ({start_x}, {start_y}) to ({end_x}, {end_y}) duration={duration}ms")
+                elif 'x' in data and 'y' in data:
                     print(f"🎯 ACTION RECEIVED: {action_type} at ({data['x']}, {data['y']})")
                 else:
                     print(f"🎯 ACTION RECEIVED: {action_type}")
