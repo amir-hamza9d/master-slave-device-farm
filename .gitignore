@@ -1,2 +1,7 @@
-_pycache_
+__pycache__/
 DEVICE_FARM_IMPLEMENTATION_PLANN.md
+.kilocode/
+.pytest_cache/
+.venv/
+farm-device-executor.log
+exclude/
