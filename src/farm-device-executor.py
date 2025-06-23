@@ -290,6 +290,85 @@ class FarmDeviceManager:
         # Fallback to ADB
         return await self.execute_tap_adb(x, y, device_info)
 
+    async def execute_long_tap_uiautomator2(self, x: int, y: int, duration: int, device_info: DeviceInfo) -> bool:
+        """Execute long-tap using uiautomator2"""
+        try:
+            device = self.get_uiautomator2_device(device_info.device_id)
+            if not device:
+                return False
+
+            device_info.status = DeviceStatus.EXECUTING
+            # Convert duration from milliseconds to seconds for uiautomator2
+            duration_seconds = duration / 1000.0
+            device.long_click(x, y, duration_seconds)
+
+            logger.info(f"✅ {device_info.device_id}: Executed long-tap at ({x}, {y}) duration={duration}ms via uiautomator2")
+            if self.debug:
+                print(f"🔒 LONG-TAP EXECUTED on {device_info.device_id}: ({x}, {y}) {duration}ms via uiautomator2")
+            else:
+                print(f"✅ {device_info.device_id}: LONG-TAP executed")
+
+            device_info.status = DeviceStatus.CONNECTED
+            device_info.error_count = 0
+            return True
+
+        except Exception as e:
+            logger.error(f"Error executing long-tap via uiautomator2 on {device_info.device_id}: {e}")
+            device_info.error_count += 1
+            device_info.status = DeviceStatus.ERROR
+            return False
+
+    async def execute_long_tap_adb(self, x: int, y: int, duration: int, device_info: DeviceInfo) -> bool:
+        """Execute long-tap using ADB input command (fallback)"""
+        try:
+            device_info.status = DeviceStatus.EXECUTING
+
+            # ADB doesn't have a direct long-tap command, so we simulate it with swipe at the same position
+            cmd = ['adb', '-s', device_info.device_id, 'shell', 'input', 'swipe', str(x), str(y), str(x), str(y), str(duration)]
+            logger.debug(f"{device_info.device_id}: Executing command: {' '.join(cmd)}")
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info(f"✅ {device_info.device_id}: Executed long-tap at ({x}, {y}) duration={duration}ms via ADB")
+                if self.debug:
+                    print(f"🔒 LONG-TAP EXECUTED on {device_info.device_id}: ({x}, {y}) {duration}ms via ADB")
+                else:
+                    print(f"✅ {device_info.device_id}: LONG-TAP executed")
+
+                device_info.status = DeviceStatus.CONNECTED
+                device_info.error_count = 0
+                return True
+            else:
+                error_msg = stderr.decode('utf-8').strip()
+                logger.error(f"ADB long-tap command failed on {device_info.device_id}: {error_msg}")
+                device_info.error_count += 1
+                device_info.status = DeviceStatus.ERROR
+                return False
+
+        except Exception as e:
+            logger.error(f"Error executing long-tap via ADB on {device_info.device_id}: {e}")
+            device_info.error_count += 1
+            device_info.status = DeviceStatus.ERROR
+            return False
+
+    async def execute_long_tap(self, x: int, y: int, duration: int, device_info: DeviceInfo) -> bool:
+        """Execute long-tap action on device with uiautomator2 first, ADB fallback"""
+        # Try uiautomator2 first
+        if UIAUTOMATOR2_AVAILABLE:
+            success = await self.execute_long_tap_uiautomator2(x, y, duration, device_info)
+            if success:
+                return True
+            logger.warning(f"{device_info.device_id}: uiautomator2 long-tap failed, falling back to ADB")
+
+        # Fallback to ADB
+        return await self.execute_long_tap_adb(x, y, duration, device_info)
+
     async def execute_swipe_uiautomator2(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int, device_info: DeviceInfo) -> bool:
         """Execute swipe using uiautomator2"""
         try:
@@ -531,6 +610,19 @@ class FarmDeviceManager:
                 else:
                     logger.warning(f"{device_id}: Invalid swipe coordinates: start=({start_x}, {start_y}), end=({end_x}, {end_y})")
 
+            elif action == 'long_tap':
+                # Execute long-tap action
+                x, y = action_data.get('x'), action_data.get('y')
+                duration = action_data.get('duration', 500)  # Default 500ms if not specified
+
+                if x is not None and y is not None:
+                    # Scale coordinates
+                    x, y = self.scale_coordinates(x, y, device_info)
+                    logger.debug(f"{device_id}: Executing long-tap at ({x}, {y}) duration={duration}ms")
+                    await self.execute_long_tap(x, y, duration, device_info)
+                else:
+                    logger.warning(f"{device_id}: Invalid long-tap coordinates: ({x}, {y})")
+
             elif action == 'key_press':
                 key_code = action_data.get('key_code')
                 if key_code:
@@ -644,6 +736,10 @@ class FarmDeviceManager:
                                 end_x, end_y = action_data.get('end_x', 0), action_data.get('end_y', 0)
                                 duration = action_data.get('duration', 0)
                                 print(f"📡 RECEIVED on {device_info.device_id}: swipe from ({start_x}, {start_y}) to ({end_x}, {end_y}) duration={duration}ms")
+                            elif action_type == 'long_tap':
+                                x, y = action_data.get('x', 0), action_data.get('y', 0)
+                                duration = action_data.get('duration', 0)
+                                print(f"📡 RECEIVED on {device_info.device_id}: long_tap at ({x}, {y}) duration={duration}ms")
                             elif 'x' in action_data and 'y' in action_data:
                                 print(f"📡 RECEIVED on {device_info.device_id}: {action_type} at ({action_data['x']}, {action_data['y']})")
                             else:
@@ -654,6 +750,8 @@ class FarmDeviceManager:
                                 print(f"📱 {device_info.device_id}: Received TAP action")
                             elif action_type == 'swipe':
                                 print(f"📱 {device_info.device_id}: Received SWIPE action")
+                            elif action_type == 'long_tap':
+                                print(f"📱 {device_info.device_id}: Received LONG-TAP action")
                             elif action_type in ['key_press', 'key_release']:
                                 print(f"📱 {device_info.device_id}: Received KEY action")
                             elif action_type == 'text_input':

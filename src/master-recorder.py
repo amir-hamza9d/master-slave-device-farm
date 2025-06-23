@@ -38,7 +38,10 @@ current_touch_event = {
     "start_time": None,
     "is_swiping": False,
     "swipe_threshold_distance": 200,  # Minimum distance in raw coordinates to consider as swipe
-    "swipe_threshold_time": 50       # Minimum time in ms to consider as swipe
+    "swipe_threshold_time": 50,      # Minimum time in ms to consider as swipe
+    # Long-tap detection fields
+    "long_tap_threshold_time": 500,  # Minimum time in ms to consider as long-tap
+    "long_tap_threshold_distance": 50  # Maximum movement distance to still consider as long-tap
 }
 
 def calculate_distance(x1, y1, x2, y2):
@@ -54,6 +57,17 @@ def is_swipe_gesture(start_x, start_y, end_x, end_y, start_time, end_time, thres
     duration = end_time - start_time
 
     return distance >= threshold_distance and duration >= threshold_time
+
+def is_long_tap_gesture(start_x, start_y, end_x, end_y, start_time, end_time, long_tap_threshold_time, long_tap_threshold_distance):
+    """Determine if movement qualifies as a long-tap gesture"""
+    if start_x is None or start_y is None or end_x is None or end_y is None:
+        return False
+
+    distance = calculate_distance(start_x, start_y, end_x, end_y)
+    duration = end_time - start_time
+
+    # Long-tap: held for sufficient time with minimal movement
+    return duration >= long_tap_threshold_time and distance <= long_tap_threshold_distance
 
 def reset_touch_event():
     """Reset touch event state for next gesture"""
@@ -511,7 +525,7 @@ async def monitor_adb_events(websocket, device_id):
                                 current_touch_event["start_y"] is not None and
                                 current_touch_event["start_time"] is not None):
 
-                                # Calculate swipe metrics for debugging
+                                # Calculate gesture metrics for debugging
                                 distance = calculate_distance(
                                     current_touch_event["start_x"], current_touch_event["start_y"],
                                     current_touch_event["x"], current_touch_event["y"]
@@ -519,10 +533,12 @@ async def monitor_adb_events(websocket, device_id):
                                 duration = end_time - current_touch_event["start_time"]
 
                                 if args.debug:
-                                    print(f"🔍 SWIPE ANALYSIS: distance={distance:.1f}px, duration={duration:.1f}ms")
-                                    print(f"🔍 THRESHOLDS: min_distance={current_touch_event['swipe_threshold_distance']}px, min_time={current_touch_event['swipe_threshold_time']}ms")
+                                    print(f"🔍 GESTURE ANALYSIS: distance={distance:.1f}px, duration={duration:.1f}ms")
+                                    print(f"🔍 SWIPE THRESHOLDS: min_distance={current_touch_event['swipe_threshold_distance']}px, min_time={current_touch_event['swipe_threshold_time']}ms")
+                                    print(f"🔍 LONG-TAP THRESHOLDS: min_time={current_touch_event['long_tap_threshold_time']}ms, max_distance={current_touch_event['long_tap_threshold_distance']}px")
                                     print(f"🔍 START: ({current_touch_event['start_x']}, {current_touch_event['start_y']}) → END: ({current_touch_event['x']}, {current_touch_event['y']})")
 
+                                # Check for different gesture types
                                 is_swipe = is_swipe_gesture(
                                     current_touch_event["start_x"], current_touch_event["start_y"],
                                     current_touch_event["x"], current_touch_event["y"],
@@ -531,8 +547,19 @@ async def monitor_adb_events(websocket, device_id):
                                     current_touch_event["swipe_threshold_time"]
                                 )
 
+                                is_long_tap = is_long_tap_gesture(
+                                    current_touch_event["start_x"], current_touch_event["start_y"],
+                                    current_touch_event["x"], current_touch_event["y"],
+                                    current_touch_event["start_time"], end_time,
+                                    current_touch_event["long_tap_threshold_time"],
+                                    current_touch_event["long_tap_threshold_distance"]
+                                )
+
                                 if args.debug:
-                                    print(f"🔍 SWIPE DECISION: {'SWIPE' if is_swipe else 'TAP'} (distance >= {current_touch_event['swipe_threshold_distance']}: {distance >= current_touch_event['swipe_threshold_distance']}, duration >= {current_touch_event['swipe_threshold_time']}: {duration >= current_touch_event['swipe_threshold_time']})")
+                                    gesture_type = "SWIPE" if is_swipe else ("LONG-TAP" if is_long_tap else "TAP")
+                                    print(f"🔍 GESTURE DECISION: {gesture_type}")
+                                    print(f"🔍   - SWIPE: distance >= {current_touch_event['swipe_threshold_distance']} ({distance >= current_touch_event['swipe_threshold_distance']}) AND duration >= {current_touch_event['swipe_threshold_time']} ({duration >= current_touch_event['swipe_threshold_time']})")
+                                    print(f"🔍   - LONG-TAP: duration >= {current_touch_event['long_tap_threshold_time']} ({duration >= current_touch_event['long_tap_threshold_time']}) AND distance <= {current_touch_event['long_tap_threshold_distance']} ({distance <= current_touch_event['long_tap_threshold_distance']})")
 
                                 if is_swipe:
                                     # Send swipe event
@@ -552,6 +579,23 @@ async def monitor_adb_events(websocket, device_id):
                                         print(f"🚀 SENDING: swipe from ({current_touch_event['start_x']}, {current_touch_event['start_y']}) to ({current_touch_event['x']}, {current_touch_event['y']}) duration={duration}ms (raw)")
                                     else:
                                         print(f"👆 SWIPE COMPLETED")
+                                    await send_action(websocket, action_data)
+                                elif is_long_tap:
+                                    # Send long-tap event
+                                    duration = int(end_time - current_touch_event["start_time"])
+                                    action_data = {
+                                        "action": "long_tap",
+                                        "x": current_touch_event["x"],
+                                        "y": current_touch_event["y"],
+                                        "duration": duration,
+                                        "device_path": device_path
+                                    }
+                                    logger.debug(f"Preparing to send long_tap: {action_data}")
+                                    # Show clean action in normal mode, detailed in debug mode
+                                    if args.debug:
+                                        print(f"🚀 SENDING: long_tap at ({current_touch_event['x']}, {current_touch_event['y']}) duration={duration}ms (raw)")
+                                    else:
+                                        print(f"🔒 LONG-TAP COMPLETED")
                                     await send_action(websocket, action_data)
                                 else:
                                     # Send tap_release event (existing tap logic)
