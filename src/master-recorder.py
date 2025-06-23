@@ -6,6 +6,7 @@ import websockets
 import logging
 import time
 import argparse
+import math
 from typing import Dict, List, Optional, Tuple
 
 # Parse command line arguments
@@ -27,7 +28,59 @@ CENTRAL_SERVER_URL = "ws://127.0.0.1:8765/master"
 # Updated regex to handle different getevent output formats
 EVENT_LINE_REGEX = re.compile(r'(?:\[\s*\d+\.\d+\]\s*)?(/dev/input/event\d+):\s*(\w+)\s*(\w+)\s*([0-9a-fA-F]+)') # Made timestamp optional
 
-current_touch_event = {"x": None, "y": None, "down": False}
+current_touch_event = {
+    "x": None,
+    "y": None,
+    "down": False,
+    # Swipe detection fields
+    "start_x": None,
+    "start_y": None,
+    "start_time": None,
+    "is_swiping": False,
+    "swipe_threshold_distance": 200,  # Minimum distance in raw coordinates to consider as swipe
+    "swipe_threshold_time": 50,      # Minimum time in ms to consider as swipe
+    # Long-tap detection fields
+    "long_tap_threshold_time": 500,  # Minimum time in ms to consider as long-tap
+    "long_tap_threshold_distance": 50  # Maximum movement distance to still consider as long-tap
+}
+
+def calculate_distance(x1, y1, x2, y2):
+    """Calculate distance between two points"""
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+def is_swipe_gesture(start_x, start_y, end_x, end_y, start_time, end_time, threshold_distance, threshold_time):
+    """Determine if movement qualifies as a swipe gesture"""
+    if start_x is None or start_y is None or end_x is None or end_y is None:
+        return False
+
+    distance = calculate_distance(start_x, start_y, end_x, end_y)
+    duration = end_time - start_time
+
+    return distance >= threshold_distance and duration >= threshold_time
+
+def is_long_tap_gesture(start_x, start_y, end_x, end_y, start_time, end_time, long_tap_threshold_time, long_tap_threshold_distance):
+    """Determine if movement qualifies as a long-tap gesture"""
+    if start_x is None or start_y is None or end_x is None or end_y is None:
+        return False
+
+    distance = calculate_distance(start_x, start_y, end_x, end_y)
+    duration = end_time - start_time
+
+    # Long-tap: held for sufficient time with minimal movement
+    return duration >= long_tap_threshold_time and distance <= long_tap_threshold_distance
+
+def reset_touch_event():
+    """Reset touch event state for next gesture"""
+    global current_touch_event
+    current_touch_event.update({
+        "x": None,
+        "y": None,
+        "down": False,
+        "start_x": None,
+        "start_y": None,
+        "start_time": None,
+        "is_swiping": False
+    })
 
 async def connect_websocket():
     while True:
@@ -430,11 +483,32 @@ async def monitor_adb_events(websocket, device_id):
                     current_touch_event["x"] = event_value_int # Store raw value
                     if args.debug:
                         print(f"👆 TOUCH X (raw): {event_value_int}")
+
+                    # If finger is down and we don't have start coordinates yet, capture them
+                    if (current_touch_event["down"] and
+                        current_touch_event["start_x"] is None and
+                        current_touch_event["y"] is not None):
+                        current_touch_event["start_x"] = event_value_int
+                        current_touch_event["start_y"] = current_touch_event["y"]
+                        current_touch_event["start_time"] = time.time() * 1000
+                        if args.debug:
+                            print(f"🎯 SWIPE START CAPTURED: ({current_touch_event['start_x']}, {current_touch_event['start_y']}) at {current_touch_event['start_time']}")
+
                 # Handle Y position (0036 = ABS_MT_POSITION_Y)
                 elif event_code == 'ABS_MT_POSITION_Y' or event_code == '0036':
                     current_touch_event["y"] = event_value_int # Store raw value
                     if args.debug:
                         print(f"👆 TOUCH Y (raw): {event_value_int}")
+
+                    # If finger is down and we don't have start coordinates yet, capture them
+                    if (current_touch_event["down"] and
+                        current_touch_event["start_y"] is None and
+                        current_touch_event["x"] is not None):
+                        current_touch_event["start_x"] = current_touch_event["x"]
+                        current_touch_event["start_y"] = event_value_int
+                        current_touch_event["start_time"] = time.time() * 1000
+                        if args.debug:
+                            print(f"🎯 SWIPE START CAPTURED: ({current_touch_event['start_x']}, {current_touch_event['start_y']}) at {current_touch_event['start_time']}")
                 # Handle tracking ID (0039 = ABS_MT_TRACKING_ID)
                 elif event_code == 'ABS_MT_TRACKING_ID' or event_code == '0039':
                     # ffffffff (4294967295) indicates finger UP (release)
@@ -442,41 +516,155 @@ async def monitor_adb_events(websocket, device_id):
                     if event_value_int == 4294967295 or event_value == 'ffffffff': # Finger UP (release)
                         if args.debug:
                             print(f"👆 FINGER UP (RELEASE)")
+
                         if current_touch_event["down"] and current_touch_event["x"] is not None and current_touch_event["y"] is not None:
-                            action_data = {
-                                "action": "tap_release",
-                                "x": current_touch_event["x"],
-                                "y": current_touch_event["y"],
-                                "device_path": device_path
-                            }
-                            logger.debug(f"Preparing to send tap_release: {action_data}") # Log action data before sending
-                            # Show clean action in normal mode, detailed in debug mode
-                            if args.debug:
-                                print(f"🚀 SENDING: tap_release at ({current_touch_event['x']}, {current_touch_event['y']}) (raw)")
+                            end_time = time.time() * 1000  # Convert to milliseconds
+
+                            # Check if this is a swipe gesture
+                            if (current_touch_event["start_x"] is not None and
+                                current_touch_event["start_y"] is not None and
+                                current_touch_event["start_time"] is not None):
+
+                                # Calculate gesture metrics for debugging
+                                distance = calculate_distance(
+                                    current_touch_event["start_x"], current_touch_event["start_y"],
+                                    current_touch_event["x"], current_touch_event["y"]
+                                )
+                                duration = end_time - current_touch_event["start_time"]
+
+                                if args.debug:
+                                    print(f"🔍 GESTURE ANALYSIS: distance={distance:.1f}px, duration={duration:.1f}ms")
+                                    print(f"🔍 SWIPE THRESHOLDS: min_distance={current_touch_event['swipe_threshold_distance']}px, min_time={current_touch_event['swipe_threshold_time']}ms")
+                                    print(f"🔍 LONG-TAP THRESHOLDS: min_time={current_touch_event['long_tap_threshold_time']}ms, max_distance={current_touch_event['long_tap_threshold_distance']}px")
+                                    print(f"🔍 START: ({current_touch_event['start_x']}, {current_touch_event['start_y']}) → END: ({current_touch_event['x']}, {current_touch_event['y']})")
+
+                                # Check for different gesture types
+                                is_swipe = is_swipe_gesture(
+                                    current_touch_event["start_x"], current_touch_event["start_y"],
+                                    current_touch_event["x"], current_touch_event["y"],
+                                    current_touch_event["start_time"], end_time,
+                                    current_touch_event["swipe_threshold_distance"],
+                                    current_touch_event["swipe_threshold_time"]
+                                )
+
+                                is_long_tap = is_long_tap_gesture(
+                                    current_touch_event["start_x"], current_touch_event["start_y"],
+                                    current_touch_event["x"], current_touch_event["y"],
+                                    current_touch_event["start_time"], end_time,
+                                    current_touch_event["long_tap_threshold_time"],
+                                    current_touch_event["long_tap_threshold_distance"]
+                                )
+
+                                if args.debug:
+                                    gesture_type = "SWIPE" if is_swipe else ("LONG-TAP" if is_long_tap else "TAP")
+                                    print(f"🔍 GESTURE DECISION: {gesture_type}")
+                                    print(f"🔍   - SWIPE: distance >= {current_touch_event['swipe_threshold_distance']} ({distance >= current_touch_event['swipe_threshold_distance']}) AND duration >= {current_touch_event['swipe_threshold_time']} ({duration >= current_touch_event['swipe_threshold_time']})")
+                                    print(f"🔍   - LONG-TAP: duration >= {current_touch_event['long_tap_threshold_time']} ({duration >= current_touch_event['long_tap_threshold_time']}) AND distance <= {current_touch_event['long_tap_threshold_distance']} ({distance <= current_touch_event['long_tap_threshold_distance']})")
+
+                                if is_swipe:
+                                    # Send swipe event
+                                    duration = int(end_time - current_touch_event["start_time"])
+                                    action_data = {
+                                        "action": "swipe",
+                                        "start_x": current_touch_event["start_x"],
+                                        "start_y": current_touch_event["start_y"],
+                                        "end_x": current_touch_event["x"],
+                                        "end_y": current_touch_event["y"],
+                                        "duration": duration,
+                                        "device_path": device_path
+                                    }
+                                    logger.debug(f"Preparing to send swipe: {action_data}")
+                                    # Show clean action in normal mode, detailed in debug mode
+                                    if args.debug:
+                                        print(f"🚀 SENDING: swipe from ({current_touch_event['start_x']}, {current_touch_event['start_y']}) to ({current_touch_event['x']}, {current_touch_event['y']}) duration={duration}ms (raw)")
+                                    else:
+                                        print(f"👆 SWIPE COMPLETED")
+                                    await send_action(websocket, action_data)
+                                elif is_long_tap:
+                                    # Send long-tap event
+                                    duration = int(end_time - current_touch_event["start_time"])
+                                    action_data = {
+                                        "action": "long_tap",
+                                        "x": current_touch_event["x"],
+                                        "y": current_touch_event["y"],
+                                        "duration": duration,
+                                        "device_path": device_path
+                                    }
+                                    logger.debug(f"Preparing to send long_tap: {action_data}")
+                                    # Show clean action in normal mode, detailed in debug mode
+                                    if args.debug:
+                                        print(f"🚀 SENDING: long_tap at ({current_touch_event['x']}, {current_touch_event['y']}) duration={duration}ms (raw)")
+                                    else:
+                                        print(f"🔒 LONG-TAP COMPLETED")
+                                    await send_action(websocket, action_data)
+                                else:
+                                    # Send tap_release event (existing tap logic)
+                                    action_data = {
+                                        "action": "tap_release",
+                                        "x": current_touch_event["x"],
+                                        "y": current_touch_event["y"],
+                                        "device_path": device_path
+                                    }
+                                    logger.debug(f"Preparing to send tap_release: {action_data}")
+                                    # Show clean action in normal mode, detailed in debug mode
+                                    if args.debug:
+                                        print(f"🚀 SENDING: tap_release at ({current_touch_event['x']}, {current_touch_event['y']}) (raw)")
+                                    else:
+                                        print(f"🎯 TAP COMPLETED")
+                                    await send_action(websocket, action_data)
                             else:
-                                print(f"🎯 TAP COMPLETED")
-                            await send_action(websocket, action_data)
-                        current_touch_event["down"] = False
-                        current_touch_event["x"] = None # Reset for next tap
-                        current_touch_event["y"] = None
+                                # Fallback to tap_release if start coordinates not available
+                                if args.debug:
+                                    print(f"⚠️  START COORDS MISSING - falling back to TAP: start_x={current_touch_event['start_x']}, start_y={current_touch_event['start_y']}, start_time={current_touch_event['start_time']}")
+
+                                action_data = {
+                                    "action": "tap_release",
+                                    "x": current_touch_event["x"],
+                                    "y": current_touch_event["y"],
+                                    "device_path": device_path
+                                }
+                                logger.debug(f"Preparing to send tap_release (fallback): {action_data}")
+                                if args.debug:
+                                    print(f"🚀 SENDING: tap_release at ({current_touch_event['x']}, {current_touch_event['y']}) (raw)")
+                                else:
+                                    print(f"🎯 TAP COMPLETED")
+                                await send_action(websocket, action_data)
+
+                        # Reset touch event state
+                        reset_touch_event()
+
                     else: # Finger DOWN (press)
                         if args.debug:
                             print(f"👆 FINGER DOWN (PRESS)")
                         current_touch_event["down"] = True
+
+                        # Always try to capture start coordinates if available
                         if current_touch_event["x"] is not None and current_touch_event["y"] is not None:
+                            # Store start coordinates and time for swipe detection
+                            current_touch_event["start_x"] = current_touch_event["x"]
+                            current_touch_event["start_y"] = current_touch_event["y"]
+                            current_touch_event["start_time"] = time.time() * 1000  # Convert to milliseconds
+
+                            if args.debug:
+                                print(f"🎯 FINGER DOWN - START COORDS SET: ({current_touch_event['start_x']}, {current_touch_event['start_y']}) at {current_touch_event['start_time']}")
+
+                            # Send tap_press event (preserve existing tap logic)
                             action_data = {
                                 "action": "tap_press",
                                 "x": current_touch_event["x"],
                                 "y": current_touch_event["y"],
                                 "device_path": device_path
                             }
-                            logger.debug(f"Preparing to send tap_press: {action_data}") # Log action data before sending
+                            logger.debug(f"Preparing to send tap_press: {action_data}")
                             # Show clean action in normal mode, detailed in debug mode
                             if args.debug:
                                 print(f"🚀 SENDING: tap_press at ({current_touch_event['x']}, {current_touch_event['y']}) (raw)")
                             else:
                                 print(f"🎯 TAP STARTED")
                             await send_action(websocket, action_data)
+                        else:
+                            if args.debug:
+                                print(f"🎯 FINGER DOWN - COORDS NOT YET AVAILABLE, will capture on next coordinate update")
  
             elif event_type == 'KEY' or event_type == '0001': # Key presses (for text input, back button etc.)
                 key_code = event_code
